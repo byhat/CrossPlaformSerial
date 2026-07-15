@@ -1,0 +1,21 @@
+NOTICE for cps
+==============
+
+This product includes software developed as part of the cps project
+(https://github.com/byhat/CrossplatformSerial).
+
+cps is licensed under the GNU Lesser General Public License v2.1 (LGPL-2.1);
+see LICENSE for the full text.
+
+Third-party components
+----------------------
+
+usb-serial-for-android
+  Used on Android for USB-serial chipset drivers (FTDI, CP21xx, CH34x,
+  PL2303, CDC/ACM, ...). Its sources are vendored under
+  third_party/usb-serial-for-android/ and compiled into an embedded
+  classes.dex at build time. See that directory for its license.
+
+boost (boost::asio)
+  Used on Linux/Windows for portable serial I/O. Header-only usage; not
+  redistributed.
