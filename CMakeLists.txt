@@ -81,7 +81,7 @@ else()
     endif()
 
     if(WIN32)
-        target_link_libraries(cps PRIVATE setupapi)
+        target_link_libraries(cps PRIVATE setupapi ws2_32)
     endif()
 endif()
 

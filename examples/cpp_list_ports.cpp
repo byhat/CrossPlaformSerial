@@ -4,7 +4,14 @@
 #include <iomanip>
 #include <iostream>
 
+#ifdef _WIN32
+#  include <windows.h>
+#endif
+
 int main() {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     const auto ports = cps::SerialPortInfo::availablePorts();
     std::cout << "Found " << ports.size() << " serial port(s):\n";
     for (const auto& p : ports) {

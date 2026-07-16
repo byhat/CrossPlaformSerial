@@ -1,23 +1,30 @@
-// cps C-ABI consumer in Go (cgo). Links libcps.so and drives it through the C API,
+// cps C-ABI consumer in Go (cgo). Links libcps and drives it through the C API,
 // including a real C -> Go callback (readyRead) invoked from the library's worker
 // thread.
 //
-// Default behaviour: scan available ports for one with vendor id 1155 (0x0483,
-// STMicroelectronics), open it, write "hello serial", and print any incoming data.
+// Default behaviour: scan available ports for one with vendor id 0x1a86
+// (CH340/CH341 USB-serial), open it, write "hello serial", and print any incoming data.
 //
-// Build the .so first (from the repo root):
+// Build the library first (from the repo root):
 //
-//	cmake -S . -B build -DCPS_BUILD_SHARED=ON && cmake --build build
+//	Linux/macOS:  cmake -S . -B build -DCPS_BUILD_SHARED=ON && cmake --build build
+//	Windows:      cmake -S . -B build -DCPS_BUILD_SHARED=OFF && cmake --build build
+//
+// (On Windows a static libcps.a avoids DLL-search issues when running via `go run`;
+//
+//	on Linux the shared libcps.so is resolved at runtime through -rpath.)
 //
 // Then, from this directory:
 //
-//	go run .                       # auto-find the VID 1155 port
+//	go run .                       # auto-find the CH340 port
 //	go run . /tmp/cpsA             # (test) open a specific port path directly
+//	go run . COM3                  # open a named port directly
 package main
 
 /*
 #cgo CFLAGS:  -I${SRCDIR}/../../include
-#cgo LDFLAGS: -L${SRCDIR}/../../build -lcps -Wl,-rpath,${SRCDIR}/../../build
+#cgo !windows LDFLAGS: -L${SRCDIR}/../../build -lcps -Wl,-rpath,${SRCDIR}/../../build
+#cgo windows  LDFLAGS: -L${SRCDIR}/../../build -lcps -lstdc++ -lwinpthread -lws2_32 -lsetupapi
 
 #include <cps/cps.h>
 #include <stdlib.h>
@@ -45,7 +52,7 @@ import (
 	"unsafe"
 )
 
-const targetVID = 0x1a86 // FTDI LoRa USB
+const targetVID = 0x1a86 // CH340 LoRa USB
 
 // readyCh is signalled from the C->Go callback (which runs on the library's worker
 // thread). It does not receive a Go pointer from C, so it is cgo-pointer-rule safe.
@@ -99,8 +106,8 @@ func main() {
 	portName := ""
 	if len(os.Args) > 1 {
 		arg := os.Args[1]
-		if strings.HasPrefix(arg, "/") {
-			// Direct port path (handy for socat/pty testing).
+		if strings.HasPrefix(arg, "/") || strings.HasPrefix(strings.ToUpper(arg), "COM") {
+			// Direct port path ("/dev/ttyUSB0" on Unix, "COM3" on Windows).
 			portName = arg
 			fmt.Printf("Using port from argument: %s\n", portName)
 		}

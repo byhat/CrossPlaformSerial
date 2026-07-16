@@ -13,8 +13,12 @@
 #  include <cstdlib>
 #  define CPS_ENUM_POSIX 1
 #elif defined(_WIN32)
-#  define WIN32_LEAN_AND_MEAN
-#  define NOMINMAX
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #  include <setupapi.h>
 #  include <initguid.h>
@@ -117,58 +121,84 @@ std::vector<RawPortInfo> enumeratePorts() {
 DEFINE_GUID(GUID_DEVINTERFACE_COMPORT, 0x86E0D1E0L, 0x8089, 0x11D0, 0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73);
 #endif
 
+static std::string winNarrow(const wchar_t* w) {
+    if (!w || !*w) return std::string();
+    int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return std::string();
+    std::string s(static_cast<std::size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, &s[0], len, nullptr, nullptr);
+    return s;
+}
+
+// "USB Serial Port (COM3)" -> "COM3" ; returns empty when no "COM<digit>" token.
+static std::string extractComName(const wchar_t* w) {
+    if (!w) return std::string();
+    for (std::size_t i = 0; w[i]; ++i) {
+        if (w[i] == L'C' && w[i + 1] == L'O' && w[i + 2] == L'M' &&
+            w[i + 3] >= L'0' && w[i + 3] <= L'9') {
+            std::size_t e = i + 3;
+            while (w[e] >= L'0' && w[e] <= L'9') ++e;
+            std::wstring token(w + i, w + e);
+            return winNarrow(token.c_str());
+        }
+    }
+    return std::string();
+}
+
+static bool readRegStr(HDEVINFO hdev, PSP_DEVINFO_DATA did, DWORD prop,
+                       wchar_t* buf, DWORD bufCch) {
+    buf[0] = L'\0';
+    return SetupDiGetDeviceRegistryPropertyW(hdev, did, prop, nullptr,
+                                             reinterpret_cast<PBYTE>(buf),
+                                             bufCch * sizeof(wchar_t), nullptr) != 0;
+}
+
+static std::uint16_t extractHexId(const std::string& upper, const std::string& key) {
+    auto p = upper.find(key);
+    if (p == std::string::npos) return 0;
+    unsigned v = 0;
+    std::sscanf(upper.c_str() + p + key.size(), "%4x", &v);
+    return static_cast<std::uint16_t>(v);
+}
+
 std::vector<RawPortInfo> enumeratePorts() {
     std::vector<RawPortInfo> out;
     HDEVINFO hdev = SetupDiGetClassDevs(&GUID_DEVINTERFACE_COMPORT, nullptr, nullptr,
                                         DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if (hdev == INVALID_HANDLE_VALUE) return out;
 
-    SP_DEVICE_INTERFACE_DATA ifData{};
-    ifData.cbSize = sizeof(ifData);
-    for (DWORD i = 0; SetupDiEnumDeviceInterfaces(hdev, nullptr, &GUID_DEVINTERFACE_COMPORT, i, &ifData); ++i) {
-        RawPortInfo info;
+    SP_DEVINFO_DATA devInfo{};
+    devInfo.cbSize = sizeof(devInfo);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(hdev, i, &devInfo); ++i) {
         wchar_t friendly[512] = {0};
+        wchar_t devDesc[512]  = {0};
+        wchar_t mfg[512]      = {0};
+        wchar_t hwid[1024]    = {0};
 
-        SP_DEVINFO_DATA devInfo{};
-        devInfo.cbSize = sizeof(devInfo);
-        // friendly name -> "COM3 (Some Device)"
-        if (SetupDiGetDeviceRegistryPropertyW(hdev, &devInfo, SPDRP_DEVICEDESC, nullptr,
-                                              reinterpret_cast<PBYTE>(friendly), sizeof(friendly), nullptr) ||
-            SetupDiGetDeviceRegistryPropertyW(hdev, &devInfo, SPDRP_FRIENDLYNAME, nullptr,
-                                              reinterpret_cast<PBYTE>(friendly), sizeof(friendly), nullptr)) {
-            // strip to COMx
-            std::wstring w(friendly);
-            std::string desc(w.begin(), w.end());
-            info.description = desc;
-            std::wstring::size_type b = w.find(L"COM");
-            if (b != std::wstring::npos) {
-                std::wstring::size_type e = w.find(L")", b);
-                info.portName = std::string(w.substr(b, (e == std::wstring::npos ? w.size() : e) - b).begin(),
-                                            w.substr(b, (e == std::wstring::npos ? w.size() : e) - b).end());
-            }
-        }
-        info.systemLocation = info.portName.empty() ? std::string("\\\\.\\") + info.portName : info.portName;
+        readRegStr(hdev, &devInfo, SPDRP_FRIENDLYNAME, friendly, 512);
+        readRegStr(hdev, &devInfo, SPDRP_DEVICEDESC,  devDesc, 512);
 
-        // VID/PID via hardware id "USB\VID_xxxx&PID_yyyy"
-        wchar_t hwid[1024] = {0};
-        if (SetupDiGetDeviceRegistryPropertyW(hdev, &devInfo, SPDRP_HARDWAREID, nullptr,
-                                              reinterpret_cast<PBYTE>(hwid), sizeof(hwid), nullptr)) {
-            std::wstring w(hwid); std::string s(w.begin(), w.end());
+        std::string comName = extractComName(friendly[0] ? friendly : devDesc);
+        if (comName.empty()) continue;  // device exposes no openable COMx name
+
+        RawPortInfo info;
+        info.portName       = comName;
+        info.systemLocation = std::string("\\\\.\\") + comName;
+        info.description    = winNarrow(devDesc[0] ? devDesc : friendly);
+
+        if (readRegStr(hdev, &devInfo, SPDRP_MFG, mfg, 512))
+            info.manufacturer = winNarrow(mfg);
+
+        if (readRegStr(hdev, &devInfo, SPDRP_HARDWAREID, hwid, 1024)) {
+            std::string s = winNarrow(hwid);
             std::string upper; upper.reserve(s.size());
             for (char c : s) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-            auto extract = [&](const std::string& key) -> std::uint16_t {
-                auto p = upper.find(key);
-                if (p == std::string::npos) return 0;
-                unsigned v = 0;
-                std::sscanf(upper.c_str() + p + key.size(), "%4x", &v);
-                return static_cast<std::uint16_t>(v);
-            };
-            info.vendorId  = extract("VID_");
-            info.productId = extract("PID_");
+            info.vendorId  = extractHexId(upper, "VID_");
+            info.productId = extractHexId(upper, "PID_");
             info.hasUsbIds = (info.vendorId != 0 && info.productId != 0);
         }
 
-        if (!info.portName.empty()) out.push_back(std::move(info));
+        out.push_back(std::move(info));
     }
     SetupDiDestroyDeviceInfoList(hdev);
     return out;

@@ -16,7 +16,7 @@
 #include <vector>
 #include <string>
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
 #  define CPS_BACKEND_WIN32
 #else
 #  define CPS_BACKEND_POSIX
