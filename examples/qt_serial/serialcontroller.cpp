@@ -1,6 +1,7 @@
 #include "serialcontroller.h"
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QMetaObject>
 #include <string>
 
@@ -91,7 +92,11 @@ void SerialController::onReadyRead() {
     // fromLatin1 maps every byte 1:1 -> no data loss for arbitrary/binary input.
     const QString text = QString::fromLatin1(
         reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()));
-    emit dataReceived(text); // auto-queued to the GUI thread
+    const QString line = QStringLiteral("[%1] (%2 bytes): %3\n")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")))
+        .arg(bytes.size())
+        .arg(text);
+    emit dataReceived(line); // auto-queued to the GUI thread
 }
 
 void SerialController::onCpsError(cps::SerialError e) {
