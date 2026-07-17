@@ -154,6 +154,16 @@ void AsioBackend::applyNativeTimeouts() {
     int fd = port_->native_handle();
     struct termios t{};
     if (tcgetattr(fd, &t) == 0) {
+        // Raw mode: pass binary data through untouched. The port defaults to
+        // canonical (cooked) mode, which interprets control bytes inside a payload:
+        // 0x04 -> EOF (read returns 0 -> asio error -> read loop stops),
+        // 0x03/0x1A -> SIGINT/SIGTSTP, 0x13/0x11 -> XOFF/XON, \r<->\n mangling.
+        // A plain-text response survives (lines flush on \n), a binary one kills the
+        // read. Char size / parity are left as asio set them (c_cflag untouched).
+        t.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL
+                       | IXON | IXOFF | IXANY);
+        t.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+        t.c_oflag &= ~OPOST;
         t.c_cc[VMIN]  = 0;
         t.c_cc[VTIME] = 1; // 0.1s inter-byte timeout -> responsive readyRead
         // space / mark parity (Linux-specific CMSPAR)

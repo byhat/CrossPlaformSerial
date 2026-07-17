@@ -15,7 +15,10 @@ ApplicationWindow {
     function doSend() {
         if (!serial.connected || inputField.length === 0)
             return
-        serial.send(inputField.text)
+        // Most devices require a line terminator; the field can't hold a real CR/LF
+        // (Enter submits), so append one unless the user disabled it.
+        var suffix = appendEolCheckBox.checked ? (eolCombo.currentValue) : ""
+        serial.send(inputField.text + suffix)
         inputField.clear()
     }
 
@@ -139,6 +142,24 @@ ApplicationWindow {
                 text: qsTr("Send")
                 enabled: serial.connected && inputField.length > 0
                 onClicked: doSend()
+            }
+            CheckBox {
+                id: appendEolCheckBox
+                checked: true
+                text: qsTr("End with")
+            }
+            ComboBox {
+                id: eolCombo
+                model: [
+                    { label: "\\r\\n", value: "\r\n" },
+                    { label: "\\n", value: "\n" },
+                    { label: "\\r", value: "\r" },
+                    { label: "(none)", value: "" }
+                ]
+                textRole: "label"
+                valueRole: "value"
+                enabled: appendEolCheckBox.checked
+                currentIndex: 0 // \r\n
             }
         }
 
