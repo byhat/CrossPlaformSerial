@@ -3,7 +3,7 @@
  * @brief Stable C ABI for the cps cross-platform serial library.
  *
  * Pure C, dependency-free (only <stdint.h>/<stddef.h>). This is the portable surface
- * usable from any language. The C++ API in <cps/*.hpp> is also available but its ABI
+ * usable from any language. The C++ API (cps/ headers) is also available but its ABI
  * across a shared-library boundary requires a compatible compiler/STL; prefer this C
  * ABI for cross-toolchain consumers.
  *

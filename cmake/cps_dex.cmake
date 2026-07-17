@@ -6,8 +6,12 @@
 # Requires ANDROID_SDK_ROOT to point at the Android SDK (with platforms/ and build-tools/).
 cmake_minimum_required(VERSION 3.16)
 
-function(cps_embed_dex)
-    cmake_parse_arguments(ARG "" "TARGET;JAVA_DIR;USB_SERIAL_DIR;GENERATED_DIR;MIN_API" "" ${ARGN})
+# Directory of this module (captured at include time; CMAKE_CURRENT_LIST_DIR is not
+# reliable inside the function below, where it resolves to the caller's directory).
+set(CPS_DEX_MODULE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+function(cps_embed_dex TARGET_NAME)
+    cmake_parse_arguments(ARG "" "JAVA_DIR;USB_SERIAL_DIR;GENERATED_DIR;MIN_API" "" ${ARGN})
 
     set(DEX_OUT     "${ARG_GENERATED_DIR}/classes.dex")
     set(CLASSES_DIR "${ARG_GENERATED_DIR}/classes")
@@ -32,18 +36,27 @@ function(cps_embed_dex)
         message(FATAL_ERROR "No android.jar under ${ANDROID_SDK_ROOT}/platforms/. Install an Android platform.")
     endif()
 
-    file(GLOB CPS_D8_CANDIDATES "${ANDROID_SDK_ROOT}/build-tools/*/d8")
+    if(CMAKE_HOST_WIN32)
+        file(GLOB CPS_D8_CANDIDATES "${ANDROID_SDK_ROOT}/build-tools/*/d8.bat")
+    else()
+        file(GLOB CPS_D8_CANDIDATES "${ANDROID_SDK_ROOT}/build-tools/*/d8")
+    endif()
     list(SORT CPS_D8_CANDIDATES)
-    list(GET CPS_D8_CANDIDATES -1 CPS_D8)
-    if(NOT CPS_D8)
+    if(NOT CPS_D8_CANDIDATES)
         message(FATAL_ERROR "d8 not found under ${ANDROID_SDK_ROOT}/build-tools/. Install Android build-tools.")
     endif()
+    list(GET CPS_D8_CANDIDATES -1 CPS_D8)
 
     # ---- collect java sources ------------------------------------------------
-    file(GLOB CPS_BRIDGE_JAVA    "${ARG_JAVA_DIR}/**/*.java" "${ARG_JAVA_DIR}/*.java")
-    file(GLOB CPS_USBSERIAL_JAVA "${ARG_USB_SERIAL_DIR}/**/*.java")
+    file(GLOB_RECURSE CPS_BRIDGE_JAVA    "${ARG_JAVA_DIR}/*.java")
+    file(GLOB_RECURSE CPS_USBSERIAL_JAVA "${ARG_USB_SERIAL_DIR}/usbSerialForAndroid/src/main/java/*.java")
 
-    set(CPS_ALL_JAVA ${CPS_BRIDGE_JAVA} ${CPS_USBSERIAL_JAVA})
+    # Minimal Java stubs (androidx.annotation.IntDef, BuildConfig) so the vendored
+    # usb-serial-for-android sources compile with plain javac, without Gradle/AndroidX.
+    set(CPS_STUBS_DIR "${CMAKE_SOURCE_DIR}/android/stubs")
+    file(GLOB_RECURSE CPS_STUBS_JAVA "${CPS_STUBS_DIR}/*.java")
+
+    set(CPS_ALL_JAVA ${CPS_BRIDGE_JAVA} ${CPS_USBSERIAL_JAVA} ${CPS_STUBS_JAVA})
     if(NOT CPS_ALL_JAVA)
         message(WARNING "No Java sources found for dex embedding (bridge or usb-serial-for-android).")
     endif()
@@ -53,12 +66,13 @@ function(cps_embed_dex)
         OUTPUT "${DEX_OUT}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CLASSES_DIR}"
         COMMAND "${CPS_JAVAC}" -source 1.8 -target 1.8 -encoding UTF-8
-                -bootclasspath "${CPS_ANDROID_JAR}"
+                -classpath "${CPS_ANDROID_JAR}"
                 -d "${CLASSES_DIR}"
                 ${CPS_ALL_JAVA}
-        COMMAND ${CMAKE_COMMAND} -E tar cf "${JAR_OUT}" --format=zip .
-                WORKING_DIRECTORY "${CLASSES_DIR}"
-        COMMAND "${CPS_D8}" --min-api "${ARG_MIN_API}" --output "${ARG_GENERATED_DIR}" "${JAR_OUT}"
+        COMMAND ${CMAKE_COMMAND} -E chdir "${CLASSES_DIR}" ${CMAKE_COMMAND}
+                -E tar cf "${JAR_OUT}" --format=zip .
+        COMMAND "${CPS_D8}" --min-api "${ARG_MIN_API}" --lib "${CPS_ANDROID_JAR}"
+                --output "${ARG_GENERATED_DIR}" "${JAR_OUT}"
         DEPENDS ${CPS_ALL_JAVA}
         COMMENT "Building embedded classes.dex (cps Android bridge)"
         VERBATIM)
@@ -67,13 +81,13 @@ function(cps_embed_dex)
     add_custom_command(
         OUTPUT "${GEN_CPP}"
         COMMAND ${CMAKE_COMMAND}
-            -DCPS_DEX_IN="${DEX_OUT}"
-            -DCPS_CPP_OUT="${GEN_CPP}"
-            -P "${CMAKE_CURRENT_LIST_DIR}/cps_dex_embed.cmake"
+            "-DCPS_DEX_IN=${DEX_OUT}"
+            "-DCPS_CPP_OUT=${GEN_CPP}"
+            -P "${CPS_DEX_MODULE_DIR}/cps_dex_embed.cmake"
         DEPENDS "${DEX_OUT}"
         COMMENT "Embedding classes.dex into cps_classes_dex.cpp"
         VERBATIM)
 
-    target_sources(${ARG_TARGET} PRIVATE "${GEN_CPP}")
-    target_include_directories(${ARG_TARGET} PRIVATE "${ARG_GENERATED_DIR}")
+    target_sources(${TARGET_NAME} PRIVATE "${GEN_CPP}")
+    target_include_directories(${TARGET_NAME} PRIVATE "${ARG_GENERATED_DIR}")
 endfunction()

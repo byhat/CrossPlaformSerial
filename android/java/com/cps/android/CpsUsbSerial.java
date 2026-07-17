@@ -40,7 +40,6 @@ public class CpsUsbSerial {
         UsbSerialPort port;
         UsbDeviceConnection connection;
         SerialInputOutputManager io;
-        Thread ioThread;
     }
     private static final ConcurrentHashMap<Long, Entry> sOpen = new ConcurrentHashMap<>();
 
@@ -105,8 +104,7 @@ public class CpsUsbSerial {
             e.port = port;
             e.connection = conn;
             e.io = new SerialInputOutputManager(port, new ReadListener(handle));
-            e.ioThread = new Thread(e.io, "cps-io");
-            e.ioThread.start();
+            e.io.start();
             sOpen.put(handle, e);
             return true;
         } catch (Exception ex) {

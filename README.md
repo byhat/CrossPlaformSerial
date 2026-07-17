@@ -47,12 +47,21 @@ See `examples/go/README.md`.
 ### Android (NDK + SDK required)
 The Android build compiles the vendored `third_party/usb-serial-for-android` plus the
 JNI bridge in `android/java/` into `classes.dex` with `javac` + `d8` and embeds it.
-Populate the vendored library first (see `third_party/usb-serial-for-android/README.md`):
+Initialize the submodule first:
 ```sh
-git submodule add https://github.com/mik3y/usb-serial-for-android.git \
-  third_party/usb-serial-for-android
+git submodule update --init --recursive
 ```
-Then:
+
+**Build all ABIs at once** (separate build dir per ABI, output laid out as
+`jniLibs/<abi>/libcps.so`):
+```sh
+scripts/build-android.sh           # Linux / macOS
+scripts\build-android.ps1          # Windows (PowerShell)
+```
+See [`docs/android.md`](docs/android.md) for prerequisites, output layout, and how to
+wire the `.so` files into an Android app.
+
+Single ABI / manual (for reference):
 ```sh
 cmake -S . -B build-android \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
