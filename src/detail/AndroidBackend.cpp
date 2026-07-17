@@ -113,7 +113,7 @@ JNIEXPORT void JNICALL cpsNativeOnError(JNIEnv*, jclass, jlong handle, jint code
 }
 
 SerialError loadBridge(JNIEnv* env) {
-    if (!env || !g_context) return SerialError::UnsupportedOperationError;
+    if (!env || !g_context) { CPS_LOGE("loadBridge: no env/context"); return SerialError::UnsupportedOperationError; }
     if (g_bridgeClass) return SerialError::NoError;
 
     // codeCacheDir absolute path
@@ -121,14 +121,14 @@ SerialError loadBridge(JNIEnv* env) {
     jmethodID midGetCache = env->GetMethodID(ctxClass, "getCodeCacheDir", "()Ljava/io/File;");
     jobject cacheDir = midGetCache ? env->CallObjectMethod(g_context, midGetCache) : nullptr;
     env->DeleteLocalRef(ctxClass);
-    if (env->ExceptionCheck()) { env->ExceptionClear(); return SerialError::UnknownError; }
+    if (env->ExceptionCheck()) { env->ExceptionClear(); CPS_LOGE("loadBridge: getCodeCacheDir failed"); return SerialError::UnknownError; }
 
     jclass fileClass = env->FindClass("java/io/File");
     jmethodID midGetPath = env->GetMethodID(fileClass, "getAbsolutePath", "()Ljava/lang/String;");
     jstring jCachePath = cacheDir ? (jstring) env->CallObjectMethod(cacheDir, midGetPath) : nullptr;
     env->DeleteLocalRef(fileClass);
     env->DeleteLocalRef(cacheDir);
-    if (!jCachePath) return SerialError::UnknownError;
+    if (!jCachePath) { CPS_LOGE("loadBridge: cache dir path failed"); return SerialError::UnknownError; }
 
     const char* cp = env->GetStringUTFChars(jCachePath, nullptr);
     std::string dir = std::string(cp) + "/cps";
@@ -137,12 +137,17 @@ SerialError loadBridge(JNIEnv* env) {
     env->DeleteLocalRef(jCachePath);
 
     ensureDir(dir);
+    std::remove(dexPath.c_str()); // drop any stale read-only dex so we can rewrite it
     {
         std::ofstream f(dexPath, std::ios::binary | std::ios::trunc);
-        if (!f) return SerialError::ResourceError;
+        if (!f) { CPS_LOGE("loadBridge: cannot write %s", dexPath.c_str()); return SerialError::ResourceError; }
         f.write(reinterpret_cast<const char*>(cps_classes_dex), cps_classes_dex_len);
-        if (!f) return SerialError::ResourceError;
+        if (!f) { CPS_LOGE("loadBridge: write failed %s", dexPath.c_str()); return SerialError::ResourceError; }
     }
+    // Android 10+ refuses to load a writable dex ("Attempt to load writable dex
+    // file"); make it read-only so DexClassLoader accepts it.
+    ::chmod(dexPath.c_str(), 0444);
+    CPS_LOGI("loadBridge: wrote dex (%lu bytes) to %s", (unsigned long)cps_classes_dex_len, dexPath.c_str());
 
     // parent classloader = context class' loader
     jclass classClass = env->FindClass("java/lang/Class");
@@ -158,7 +163,7 @@ SerialError loadBridge(JNIEnv* env) {
     env->DeleteLocalRef(jDexPath);
     env->DeleteLocalRef(parentLoader);
     env->DeleteLocalRef(dexCls);
-    if (env->ExceptionCheck()) { env->ExceptionClear(); return SerialError::UnknownError; }
+    if (env->ExceptionCheck() || !loader) { env->ExceptionClear(); CPS_LOGE("loadBridge: DexClassLoader failed"); return SerialError::UnknownError; }
 
     jmethodID midLoad = env->GetMethodID(env->GetObjectClass(loader), "loadClass",
                                          "(Ljava/lang/String;)Ljava/lang/Class;");
@@ -166,7 +171,7 @@ SerialError loadBridge(JNIEnv* env) {
     jclass bridge = (jclass) env->CallObjectMethod(loader, midLoad, jName);
     env->DeleteLocalRef(jName);
     env->DeleteLocalRef(loader);
-    if (env->ExceptionCheck() || !bridge) { env->ExceptionClear(); return SerialError::UnknownError; }
+    if (env->ExceptionCheck() || !bridge) { env->ExceptionClear(); CPS_LOGE("loadBridge: loadClass com.cps.android.CpsUsbSerial failed"); return SerialError::UnknownError; }
 
     g_bridgeClass = (jclass) env->NewGlobalRef(bridge);
     env->DeleteLocalRef(bridge);
@@ -191,6 +196,7 @@ SerialError loadBridge(JNIEnv* env) {
         if (env->ExceptionCheck()) env->ExceptionClear();
     }
 
+    CPS_LOGI("loadBridge: ready (bridge=%p enumerate=%p open=%p)", (void*)g_bridgeClass, (void*)g_midEnumerate, (void*)g_midOpen);
     return SerialError::NoError;
 }
 
@@ -199,13 +205,17 @@ SerialError loadBridge(JNIEnv* env) {
 // ---- module init ----------------------------------------------------------
 
 SerialError androidInit(void* java_vm, void* context) {
+    CPS_LOGI("androidInit: java_vm=%p context=%p g_vm=%p", java_vm, context, (void*)g_vm);
     if (java_vm) g_vm = static_cast<JavaVM*>(java_vm);
+    if (!g_vm) { CPS_LOGE("androidInit: no JavaVM"); return SerialError::UnknownError; }
     if (context) {
         JniThread t(g_vm);
-        if (!t.ok) return SerialError::UnknownError;
+        if (!t.ok) { CPS_LOGE("androidInit: thread attach failed"); return SerialError::UnknownError; }
         if (g_context) t.env->DeleteGlobalRef(g_context);
         g_context = t.env->NewGlobalRef(static_cast<jobject>(context));
         SerialError e = loadBridge(t.env);
+        if (t.env->ExceptionCheck()) { t.env->ExceptionClear(); }
+        CPS_LOGI("androidInit: loadBridge -> %d  (bridge=%p)", (int)e, (void*)g_bridgeClass);
         if (t.attached) g_vm->DetachCurrentThread();
         return e;
     }
@@ -323,17 +333,24 @@ std::vector<RawPortInfo> enumeratePorts() {
 
     jobjectArray arr = static_cast<jobjectArray>(
         t.env->CallStaticObjectMethod(g_bridgeClass, g_midEnumerate));
-    if (t.env->ExceptionCheck() || !arr) { t.env->ExceptionClear(); return out; }
+    if (t.env->ExceptionCheck()) { t.env->ExceptionClear(); return out; }
+    if (!arr) return out;
 
     jsize n = t.env->GetArrayLength(arr);
-    jclass infoCls = t.env->FindClass("com/cps/android/CpsPortInfo");
     for (jsize i = 0; i < n; ++i) {
         jobject info = t.env->GetObjectArrayElement(arr, i);
+        if (t.env->ExceptionCheck()) { t.env->ExceptionClear(); if (info) t.env->DeleteLocalRef(info); continue; }
         if (!info) continue;
+
+        // CpsPortInfo is loaded by the DexClassLoader, NOT the system classloader, so
+        // FindClass() can't see it (ClassNotFoundException). Get the class from the
+        // object itself instead.
+        jclass infoCls = t.env->GetObjectClass(info);
+
         RawPortInfo r;
         auto getStr = [&](const char* field) -> std::string {
             jfieldID fid = t.env->GetFieldID(infoCls, field, "Ljava/lang/String;");
-            if (!fid) return {};
+            if (!fid) { if (t.env->ExceptionCheck()) t.env->ExceptionClear(); return {}; }
             jstring s = static_cast<jstring>(t.env->GetObjectField(info, fid));
             if (!s) return {};
             const char* cs = t.env->GetStringUTFChars(s, nullptr);
@@ -349,11 +366,13 @@ std::vector<RawPortInfo> enumeratePorts() {
         r.systemLocation = getStr("systemLocation");
         jfieldID fvid = t.env->GetFieldID(infoCls, "vid", "I");
         jfieldID fpid = t.env->GetFieldID(infoCls, "pid", "I");
+        if (t.env->ExceptionCheck()) t.env->ExceptionClear();
         if (fvid && fpid) {
             r.vendorId  = static_cast<std::uint16_t>(t.env->GetIntField(info, fvid));
             r.productId = static_cast<std::uint16_t>(t.env->GetIntField(info, fpid));
             r.hasUsbIds = (r.vendorId != 0 && r.productId != 0);
         }
+        t.env->DeleteLocalRef(infoCls);
         t.env->DeleteLocalRef(info);
         out.push_back(std::move(r));
     }
