@@ -121,7 +121,7 @@ third_party/        usb-serial-for-android (git submodule, used on Android)
 scripts/            build-android.{ps1,sh} — build all ABIs into dist/android/jniLibs
 docs/               android build & integration guide
 cmake/              dex build/embed + package config
-examples/           cpp_list_ports, c_minimal.c, go/ (cgo via the C ABI), qt_serial/ (Qt6 QML terminal), android_snippet.cpp
+examples/           cpp_list_ports, c_minimal.c, go/ (cgo via the C ABI), qt_serial/ (Qt6 QML terminal, C++ API), qt_serial_cabi/ (Qt6 QML terminal, C ABI only), android_snippet.cpp
 ```
 
 ## License

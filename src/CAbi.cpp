@@ -104,15 +104,15 @@ extern "C" CPS_API cps_PortInfo *cps_available_ports(int *out_count)
     void *mem = ::operator new(bytes);
     auto *block = static_cast<PortInfoBlock *>(mem);
     block->count = n;
-    for (int i = 0; i < n; ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
         cps_PortInfo &e = block->entries[i];
-        e.port_name = dupStr(v[static_cast<std::size_t>(i)].portName());
-        e.description = dupStr(v[static_cast<std::size_t>(i)].description());
-        e.manufacturer = dupStr(v[static_cast<std::size_t>(i)].manufacturer());
-        e.serial_number = dupStr(v[static_cast<std::size_t>(i)].serialNumber());
-        e.system_location = dupStr(v[static_cast<std::size_t>(i)].systemLocation());
-        e.vendor_id = v[static_cast<std::size_t>(i)].vendorIdentifier();
-        e.product_id = v[static_cast<std::size_t>(i)].productIdentifier();
+        e.port_name = dupStr(v[i].portName());
+        e.description = dupStr(v[i].description());
+        e.manufacturer = dupStr(v[i].manufacturer());
+        e.serial_number = dupStr(v[i].serialNumber());
+        e.system_location = dupStr(v[i].systemLocation());
+        e.vendor_id = v[i].vendorIdentifier();
+        e.product_id = v[i].productIdentifier();
     }
     return block->entries;
 }

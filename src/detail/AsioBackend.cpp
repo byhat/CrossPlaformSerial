@@ -32,16 +32,17 @@ using boost::system::error_code;
 
 // ---- error mapping --------------------------------------------------------
 
+// Classifies an OPEN failure (device absent / permission / busy). Runtime I/O
+// failures on an already-open port are reported directly by the read/write handlers
+// as ResourceError (any unexpected failure = the connection/resource is gone), so
+// this is intentionally not used to map mid-session errors.
 static SerialError mapError(const error_code& ec) {
     if (!ec) return SerialError::NoError;
-    if (ec == asio::error::operation_aborted) return SerialError::NoError; // closing
     int v = ec.value();
 #if defined(CPS_BACKEND_POSIX)
     if (v == ENOENT || v == ENXIO)         return SerialError::DeviceNotFoundError;
     if (v == EACCES || v == EPERM)         return SerialError::PermissionError;
     if (v == EBUSY)                        return SerialError::ResourceError;
-    if (v == EIO || v == EPIPE || v == ENODEV)
-                                            return SerialError::ResourceError;
 #else
     if (v == 2L)   return SerialError::DeviceNotFoundError;   // ERROR_FILE_NOT_FOUND
     if (v == 5L)   return SerialError::PermissionError;       // ERROR_ACCESS_DENIED
@@ -82,6 +83,7 @@ bool AsioBackend::open(const std::string& name, OpenMode mode) {
     applyNativeTimeouts();
 
     running_ = true;
+    closing_ = false;
     work_ = std::make_unique<WorkGuard>(asio::make_work_guard(*io_));
     if (!thread_.joinable())
         thread_ = std::thread([this]() { io_->run(); });
@@ -91,6 +93,7 @@ bool AsioBackend::open(const std::string& name, OpenMode mode) {
 }
 
 void AsioBackend::close() {
+    closing_ = true;
     running_ = false;
 
     if (port_ && port_->is_open()) {
@@ -242,10 +245,9 @@ void AsioBackend::doRead() {
     port_->async_read_some(asio::buffer(readScratch_),
         [this](const error_code& ec, std::size_t n) {
             if (ec) {
-                if (running_) {
-                    SerialError mapped = mapError(ec);
-                    if (mapped != SerialError::NoError) notifyError(mapped);
-                }
+                // Any read failure on an open port (while we're not closing it
+                // ourselves) means the connection/resource is gone -> ResourceError.
+                if (running_) notifyError(SerialError::ResourceError);
                 running_ = false;
                 return;
             }
@@ -274,8 +276,10 @@ std::int64_t AsioBackend::write(const void* data, std::size_t size) {
             [this, buf](const error_code& ec, std::size_t written) {
                 bytesToWrite_.fetch_sub(static_cast<std::int64_t>(buf->size()));
                 if (ec) {
-                    SerialError mapped = mapError(ec);
-                    if (mapped != SerialError::NoError) notifyError(mapped);
+                    // Writing to a gone/broken port is the same ResourceError as a
+                    // read-side disconnect; suppressed while we are closing (the abort
+                    // is our own, not a device error).
+                    if (!closing_.load()) notifyError(SerialError::ResourceError);
                 } else if (onBytesWritten && written) {
                     onBytesWritten(static_cast<std::int64_t>(written));
                 }

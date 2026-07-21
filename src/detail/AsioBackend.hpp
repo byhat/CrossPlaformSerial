@@ -78,6 +78,7 @@ private:
     std::unique_ptr<WorkGuard> work_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> closing_{false}; // true while we are tearing the port down
 
     mutable std::mutex bufMx_;
     ReadBuffer readBuffer_;

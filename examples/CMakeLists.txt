@@ -13,6 +13,7 @@ if(CPS_BUILD_EXAMPLES)
     # Qt6 QML terminal (only when Qt6 is available)
     find_package(Qt6 6.2 QUIET COMPONENTS Core Gui Quick)
     if(Qt6_FOUND)
-        add_subdirectory(qt_serial)
+        add_subdirectory(qt_serial)        # C++ API consumer
+        add_subdirectory(qt_serial_cabi)   # C ABI consumer (ABI-portable)
     endif()
 endif()
